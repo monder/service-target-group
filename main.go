@@ -13,52 +13,38 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/config"
-	"sigs.k8s.io/controller-runtime/pkg/controller"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
-	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/runtime/signals"
-	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
 func main() {
-	mgr, err := manager.New(config.GetConfigOrDie(), manager.Options{})
+	reconciler := &endpointReconciler{
+		managedResources: make(map[string]map[string]*elbv2.TargetDescription, 0),
+	}
+	manager, err := builder.SimpleController().
+		ForType(&corev1.Service{}).
+		Owns(&corev1.Endpoints{}).
+		Build(reconciler)
+
 	if err != nil {
-		log.Println("Unable to initialize manager: ", err)
+		log.Println("Unable to build controller:", err)
 		os.Exit(1)
 	}
 
-	c, err := controller.New("foo-controller", mgr, controller.Options{
-		Reconciler: &endpointReconciler{
-			client:           mgr.GetClient(),
-			managedResources: make(map[string]map[string]bool, 0),
-		},
-	})
-	if err != nil {
-		log.Println("Unable to initialize controller: ", err)
+	reconciler.client = manager.GetClient()
+
+	if err := manager.Start(signals.SetupSignalHandler()); err != nil {
+		log.Println("Unable to run controller:", err)
 		os.Exit(1)
 	}
 
-	if err := c.Watch(&source.Kind{Type: &corev1.Service{}}, &handler.EnqueueRequestForObject{}); err != nil {
-		log.Println("Unable to watch services: ", err)
-		os.Exit(1)
-	}
-	if err := c.Watch(&source.Kind{Type: &corev1.Endpoints{}}, &handler.EnqueueRequestForObject{}); err != nil {
-		log.Println("Unable to watch endpoints: ", err)
-		os.Exit(1)
-	}
-
-	if err := mgr.Start(signals.SetupSignalHandler()); err != nil {
-		log.Println("Unable to run manager: ", err)
-		os.Exit(1)
-	}
 }
 
 type endpointReconciler struct {
 	client           client.Client
-	managedResources map[string]map[string]bool
+	managedResources map[string]map[string]*elbv2.TargetDescription
 }
 
 func (r *endpointReconciler) Reconcile(request reconcile.Request) (reconcile.Result, error) {
@@ -69,13 +55,12 @@ func (r *endpointReconciler) Reconcile(request reconcile.Request) (reconcile.Res
 	rss := &corev1.Service{}
 	err := r.client.Get(context.TODO(), request.NamespacedName, rss)
 	if errors.IsNotFound(err) {
-		if r.managedResources[request.NamespacedName.String()] != nil {
-			// TODO cleanup all
-		}
+		delete(r.managedResources, request.NamespacedName.String())
+		// TODO deregister everything?
 		return reconcile.Result{}, nil
 	}
 
-	targetGroupARN := rss.Annotations["alb.kubernetes.io/target-group"]
+	targetGroupARN := rss.Annotations["stg.monder.cc/target-group"]
 	if targetGroupARN == "" { // Skip services that we do not need to register
 		return reconcile.Result{}, nil
 	}
@@ -83,24 +68,27 @@ func (r *endpointReconciler) Reconcile(request reconcile.Request) (reconcile.Res
 	rse := &corev1.Endpoints{}
 	err = r.client.Get(context.TODO(), request.NamespacedName, rse)
 	if errors.IsNotFound(err) {
-		// TODO cleanup all
+		delete(r.managedResources, request.NamespacedName.String())
+		// TODO deregister everything?
 		return reconcile.Result{}, nil
 	}
 
-	newState := make(map[string]bool, 0)
+	newState := make(map[string]*elbv2.TargetDescription, 0)
 
 	for _, s := range rse.Subsets {
-		for _, a := range s.Addresses {
-			newState[a.IP] = true
+		for _, p := range s.Ports {
+			for _, a := range s.Addresses {
+				newState[fmt.Sprintf("%s:%d", a.IP, p.Port)] = &elbv2.TargetDescription{
+					Id:   aws.String(a.IP),
+					Port: aws.Int64(int64(p.Port)),
+				}
+			}
 		}
 	}
 
 	if reflect.DeepEqual(newState, r.managedResources[request.NamespacedName.String()]) {
-		fmt.Println("equal")
 		return reconcile.Result{}, nil
 	}
-
-	r.managedResources[request.NamespacedName.String()] = newState
 
 	targetsToDeregister := make([]*elbv2.TargetDescription, 0)
 	targetsToRegister := make([]*elbv2.TargetDescription, 0)
@@ -117,24 +105,22 @@ func (r *endpointReconciler) Reconcile(request reconcile.Request) (reconcile.Res
 	}
 
 	for _, th := range result.TargetHealthDescriptions {
-		_, keep := newState[*th.Target.Id]
+		_, keep := newState[fmt.Sprintf("%s:%d", *th.Target.Id, *th.Target.Port)]
 		if !keep {
 			targetsToDeregister = append(targetsToDeregister, th.Target)
 		}
 	}
 
-	for ip := range newState {
+	for _, td := range newState {
 		found := false
 		for _, th := range result.TargetHealthDescriptions {
-			if *th.Target.Id == ip {
+			if *th.Target.Id == *td.Id && *th.Target.Port == *td.Port && *th.TargetHealth.State != elbv2.TargetHealthStateEnumDraining {
 				found = true
 				break
 			}
 		}
 		if !found {
-			targetsToRegister = append(targetsToRegister, &elbv2.TargetDescription{
-				Id: aws.String(ip),
-			})
+			targetsToRegister = append(targetsToRegister, td)
 		}
 	}
 
@@ -164,5 +150,6 @@ func (r *endpointReconciler) Reconcile(request reconcile.Request) (reconcile.Res
 	}
 
 	fmt.Println("---")
+	r.managedResources[request.NamespacedName.String()] = newState
 	return reconcile.Result{}, nil
 }

@@ -1,6 +1,7 @@
 module github.com/monder/service-target-group
 
 require (
+	github.com/aws/aws-sdk-go v1.15.49
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/fsnotify/fsnotify v1.4.7 // indirect
 	github.com/ghodss/yaml v1.0.0 // indirect
