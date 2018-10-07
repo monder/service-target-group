@@ -114,3 +114,7 @@ subjects:
   name: stg-controller
   namespace: default
 ```
+
+## TODO
+
+* Deregister all targets when kubernetes service is destroyed.
