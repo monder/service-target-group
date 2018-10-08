@@ -25,7 +25,7 @@ func main() {
 	}
 	manager, err := builder.SimpleController().
 		ForType(&corev1.Service{}).
-		Owns(&corev1.Endpoints{}).
+		ForType(&corev1.Endpoints{}).
 		Build(reconciler)
 
 	if err != nil {
@@ -87,6 +87,7 @@ func (r *endpointReconciler) Reconcile(request reconcile.Request) (reconcile.Res
 	}
 
 	if reflect.DeepEqual(newState, r.managedResources[request.NamespacedName.String()]) {
+		fmt.Println("equal")
 		return reconcile.Result{}, nil
 	}
 
