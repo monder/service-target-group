@@ -118,3 +118,4 @@ subjects:
 ## TODO
 
 * Deregister all targets when kubernetes service is destroyed.
+* Make namespace configurable
