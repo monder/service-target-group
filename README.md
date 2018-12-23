@@ -82,9 +82,8 @@ spec:
       containers:
       - name: stg-controller
         image: monder/service-target-group:latest
-        env:
-        - name: AWS_REGION
-          value: eu-west-1
+        args:
+        - -namespaces=default,public
 ---
 kind: ClusterRole
 apiVersion: rbac.authorization.k8s.io/v1
@@ -118,4 +117,3 @@ subjects:
 ## TODO
 
 * Deregister all targets when kubernetes service is destroyed.
-* Make namespace configurable

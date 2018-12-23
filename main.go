@@ -8,6 +8,7 @@ import (
 	"reflect"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/arn"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/elbv2"
 
@@ -48,10 +49,6 @@ type endpointReconciler struct {
 }
 
 func (r *endpointReconciler) Reconcile(request reconcile.Request) (reconcile.Result, error) {
-	if request.NamespacedName.Namespace != "default" { // TODO
-		return reconcile.Result{}, nil
-	}
-
 	rss := &corev1.Service{}
 	err := r.client.Get(context.TODO(), request.NamespacedName, rss)
 	if errors.IsNotFound(err) {
@@ -62,6 +59,11 @@ func (r *endpointReconciler) Reconcile(request reconcile.Request) (reconcile.Res
 
 	targetGroupARN := rss.Annotations["stg.monder.cc/target-group"]
 	if targetGroupARN == "" { // Skip services that we do not need to register
+		return reconcile.Result{}, nil
+	}
+	parsedARN, err := arn.Parse(targetGroupARN)
+	if err != nil {
+		fmt.Println(err.Error())
 		return reconcile.Result{}, nil
 	}
 
@@ -87,19 +89,18 @@ func (r *endpointReconciler) Reconcile(request reconcile.Request) (reconcile.Res
 	}
 
 	if reflect.DeepEqual(newState, r.managedResources[request.NamespacedName.String()]) {
-		fmt.Println("equal")
 		return reconcile.Result{}, nil
 	}
 
 	targetsToDeregister := make([]*elbv2.TargetDescription, 0)
 	targetsToRegister := make([]*elbv2.TargetDescription, 0)
 
-	svc := elbv2.New(session.New())
-	input := &elbv2.DescribeTargetHealthInput{
+	svc := elbv2.New(session.Must(session.NewSession(&aws.Config{
+		Region: aws.String(parsedARN.Region),
+	})))
+	result, err := svc.DescribeTargetHealth(&elbv2.DescribeTargetHealthInput{
 		TargetGroupArn: aws.String(targetGroupARN),
-	}
-
-	result, err := svc.DescribeTargetHealth(input)
+	})
 	if err != nil {
 		fmt.Println(err.Error())
 		return reconcile.Result{}, nil
@@ -132,22 +133,24 @@ func (r *endpointReconciler) Reconcile(request reconcile.Request) (reconcile.Res
 
 	// Register
 	if len(targetsToRegister) > 0 {
-		input2 := &elbv2.RegisterTargetsInput{
+		_, err = svc.RegisterTargets(&elbv2.RegisterTargetsInput{
 			TargetGroupArn: aws.String(targetGroupARN),
 			Targets:        targetsToRegister,
+		})
+		if err != nil {
+			fmt.Println(err.Error())
 		}
-		_, err = svc.RegisterTargets(input2)
-		fmt.Println(err)
 	}
 
 	// Deregister
 	if len(targetsToDeregister) > 0 {
-		input3 := &elbv2.DeregisterTargetsInput{
+		_, err = svc.DeregisterTargets(&elbv2.DeregisterTargetsInput{
 			TargetGroupArn: aws.String(targetGroupARN),
 			Targets:        targetsToDeregister,
+		})
+		if err != nil {
+			fmt.Println(err.Error())
 		}
-		_, err = svc.DeregisterTargets(input3)
-		fmt.Println(err)
 	}
 
 	fmt.Println("---")
