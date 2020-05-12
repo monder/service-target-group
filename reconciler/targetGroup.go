@@ -9,7 +9,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/arn"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/elbv2"
-
+	log "github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -79,10 +79,17 @@ func (r *endpointReconciler) ReconcileTargetGroup(request reconcile.Request, tar
 		}
 	}
 
-	fmt.Println("dereg:")
-	fmt.Println(targetsToDeregister)
-	fmt.Println("reg:")
-	fmt.Println(targetsToRegister)
+	log.WithFields(
+		log.Fields{
+			"targets": targetsToDeregister,
+		},
+	).Info("deregistering")
+
+	log.WithFields(
+		log.Fields{
+			"targets": targetsToRegister,
+		},
+	).Info("registering")
 
 	// Register
 	if len(targetsToRegister) > 0 {
@@ -91,7 +98,11 @@ func (r *endpointReconciler) ReconcileTargetGroup(request reconcile.Request, tar
 			Targets:        targetsToRegister,
 		})
 		if err != nil {
-			fmt.Println(err.Error())
+			log.WithFields(
+				log.Fields{
+					"error": err,
+				},
+			).Error("registering targets")
 		}
 	}
 
@@ -102,11 +113,15 @@ func (r *endpointReconciler) ReconcileTargetGroup(request reconcile.Request, tar
 			Targets:        targetsToDeregister,
 		})
 		if err != nil {
-			fmt.Println(err.Error())
+			log.WithFields(
+				log.Fields{
+					"error": err,
+				},
+			).Error("deregistering targets")
 		}
 	}
 
-	fmt.Println("---")
+	log.Info("finished reconciling loop")
 	r.elbResources[request.NamespacedName.String()] = newState
 	return nil
 }

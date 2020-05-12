@@ -2,13 +2,12 @@ package reconciler
 
 import (
 	"context"
-	"fmt"
 	"reflect"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/route53"
-
+	log "github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -43,7 +42,12 @@ func (r *endpointReconciler) ReconcileRoute53(request reconcile.Request, zone st
 		return nil
 	}
 
-	fmt.Printf("updating route53: %s\n", domain)
+	log.WithFields(
+		log.Fields{
+			"route53-domain": domain,
+		},
+	).Info("updating route53 domain")
+
 	svc := route53.New(session.Must(session.NewSession(&aws.Config{})))
 	_, err = svc.ChangeResourceRecordSets(&route53.ChangeResourceRecordSetsInput{
 		ChangeBatch: &route53.ChangeBatch{
@@ -58,7 +62,12 @@ func (r *endpointReconciler) ReconcileRoute53(request reconcile.Request, zone st
 	})
 
 	if err != nil {
-		fmt.Println(err.Error())
+		log.WithFields(
+			log.Fields{
+				"route53-domain": domain,
+				"error":          err,
+			},
+		).Error("updating route53 domain")
 	}
 
 	r.route53Resources[request.NamespacedName.String()] = newRecordSet

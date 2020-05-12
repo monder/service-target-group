@@ -1,4 +1,5 @@
-FROM golang:1.11 as builder
+FROM golang:1.14 as builder
+
 RUN mkdir /build
 ADD . /build/
 WORKDIR /build/
@@ -9,5 +10,4 @@ FROM scratch
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /build/stg-controller /stg-controller
 
-WORKDIR /
 ENTRYPOINT ["/stg-controller"]
